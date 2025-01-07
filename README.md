@@ -19,11 +19,17 @@
 
 
 
+
+
 ### Approach 
+Get information from specific Stock, and then use SOR, in order to break order, by first finding out all current prices from different trading 
+Venues. Use data found by end of simulation in order to train model as well as visualize how profitable potential strategy used was in certain 
+market conditions
 
 
 ### Take aways 
-
 I should have used data that was older, in order 
-to see if the model would be able to be profitable over a greater period of time 
+to see if the model would be able to be profitable over a greater period of time.
+Did not have enough time to complete task.
+
 
