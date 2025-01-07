@@ -1,88 +1,85 @@
-import databento as db
-import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
-
-# First, create a historical client
-client = db.Historical(key="n/a")
-
-# Next, we will request mbp-10 for the front-month ES contract
-data = client.timeseries.get_range(
-    dataset="GLBX.MDP3",
-    schema="mbp-10",
-    start="2023-12-06T14:30:00",
-    end="2023-12-06T20:33:00",
-    symbols=["ES.n.0"],
-    stype_in="continuous",
-)
-
-# And, convert to a pandas DataFrame
-df = data.to_df()
-
-# Filter out trades only
-df = df[df.action == "T"]
-# Now, get midprice returns with a forward markout of 500 trades
-df["mid"] = (df["bid_px_00"] + df["ask_px_00"]) / 2
-df["ret_500t"] = df["mid"].shift(-500) - df["mid"]
-df = df.dropna()
-
-# Calculate depth imbalance on top level ('skew')
-df["skew"] = np.log(df.bid_sz_00) - np.log(df.ask_sz_00)
-
-# Calculate order imbalance on top ten levels ('imbalance')
-bid_count = df[list(df.filter(regex="bid_ct_0[0-9]"))].sum(axis=1)
-ask_count = df[list(df.filter(regex="ask_ct_0[0-9]"))].sum(axis=1)
-df["imbalance"] = np.log(bid_count) - np.log(ask_count)
-
-# Split in-sample and out-of-sample
-split = int(0.66 * len(df))
-split -= split % 100
-df_in = df.iloc[:split]
-df_out = df.iloc[split:]
-
-# Now, evaluate signal correlation
-corr = df_in[["skew", "imbalance", "ret_500t"]].corr()
-print(corr.where(np.triu(np.ones(corr.shape)).astype(bool)))
-
-reg = LinearRegression(fit_intercept=False, positive=True)
-
-# Create a model using skew only
-reg.fit(df_in[["skew"]], df_in["ret_500t"])
-pred_skew = reg.predict(df_out[["skew"]])
-
-# Create a model using imbalance only
-reg.fit(df_in[["imbalance"]], df_in["ret_500t"])
-pred_imbalance = reg.predict(df_out[["imbalance"]])
-
-# Create a model using both skew and imbalance
-reg.fit(df_in[["skew", "imbalance"]], df_in["ret_500t"])
-pred_combined = reg.predict(df_out[["skew", "imbalance"]])
+import matplotlib.pyplot as plt
+import csv
+from datetime import datetime
 
 
-# Define a function to calculate profit and loss
-def get_cumulative_markout_pnl(pred):
-    df_pnl = pd.DataFrame({"pred": pred, "ret_500t": df_out["ret_500t"].values})
-    df_pnl.loc[df_pnl["pred"] < 0, "ret_500t"] *= -1
-    df_pnl = df_pnl.sort_values(by="pred")
-    return df_pnl["ret_500t"].cumsum().values
+def visualize_market(filename, s_symbol):
+    open_d = []
+    close_d = []
+    high_d = []
+    low_d = []
+    time = []
+    with open(filename) as file:
+        csv_file = csv.reader(file)
+        fields = next(csv_file)
+        for record in csv_file:
+            ts_event = record[0]
+            r_type = record[1]
+            publisher_id = record[2]
+            instrument_id = record[3]
+            open_price = record[4]
+            high = record[5]
+            low = record[6]
+            close = record[7]
+            volume = record[8]
+            symbol = record[9]
+            if symbol == s_symbol:
+                open_d.append(float(open_price))
+                close_d.append(float(close))
+                high_d.append(float(high))
+                low_d.append(float(low))
+            time.append(datetime.fromisoformat(ts_event))
+    stock_prices = pd.DataFrame(
+        {
+            'open': open_d,
+            'close': close_d,
+            'high': high_d,
+            'low': low_d,
+        },
+        index=pd.to_datetime(time[:len(open_d)])
+    )
+
+    plt.figure()
+
+    up = stock_prices[stock_prices.close >= stock_prices.open] # up ticks
+
+    down = stock_prices[stock_prices.close < stock_prices.open] # down ticks
+
+    col1 = "red"
+
+    col2 = "green"
+
+# Setting width of candlestick elements
+    width = .0005
+    width2 = .0001
+    plt.bar(up.index, up.close-up.open, width,
+            bottom=up.open, color=col1, edgecolor='grey')
+    plt.bar(up.index, up.high-up.close, width2,
+            bottom=up.close, color=col1, edgecolor='grey')
+    plt.bar(up.index, up.low-up.open, width2,
+            bottom=up.open, color=col1, edgecolor='grey')
+
+    # Plot down candlesticks
+    plt.bar(down.index, down.close-down.open, width,
+            bottom=down.open, color=col2, edgecolor='grey')
+    plt.bar(down.index, down.high-down.open, width2,
+            bottom=down.open, color=col2, edgecolor='grey')
+    plt.bar(down.index, down.low-down.close, width2,
+            bottom=down.close, color=col2, edgecolor='grey')
+
+    # Improve the appearance of x-axis
+    plt.xticks(rotation=45, ha='right')
+    plt.xlabel('Time')
+    plt.ylabel('Price')
+    plt.title(f'Candlestick Chart for {s_symbol}')
+    plt.tight_layout()
+    # Show the plot
+    plt.show()
+
+def main():
+    visualize_market(
+        "../data/processed/dbeq-basic-20241204.ohlcv-1s.csv", "AAPL")
 
 
-# Then, collect results into a DataFrame
-results = pd.DataFrame(
-    {
-        "skew": get_cumulative_markout_pnl(pred_skew),
-        "imbalance": get_cumulative_markout_pnl(pred_imbalance),
-        "combined": get_cumulative_markout_pnl(pred_combined),
-    },
-    index=np.linspace(0, 100, num=len(df_out)),
-)
-
-# Plot the results
-results.plot(
-    title="Forecasting with book skew vs. imbalance",
-    xlabel="Predictor value (percentile)",
-    ylabel="Cumulative return",
-).legend(loc="lower center", ncols=3)
-plt.show()
-
+main()
